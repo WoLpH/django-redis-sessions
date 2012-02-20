@@ -1,40 +1,62 @@
+import gc
 import math
 import time
 import datetime
 
 from django.core.management.base import BaseCommand
 from django.contrib.sessions.models import Session
-from redis_sessions import utils
 from redis_sessions.session import SessionStore
 
 CHUNK_SIZE = 100000
 
 
 class Command(BaseCommand):
+    '''Convert your database sessions to redis sessions
+
+    If this script is too slow, you can use this instead:
+
+    Put this query in `sessions.sql`:
+
+    COPY (
+        SELECT
+            'SETEX ' || session_key || ' '
+            || DATE_PART('epoch', expire_date - NOW())::integer ||
+            ' "' || session_data || '"'
+        FROM django_session
+        where expire_date > NOW()
+    )
+    TO STDOUT;
+
+    And execute this command:
+    # psql -o sessions.txt -f sessions.sql | redis-cli
+    '''
     def handle(self, *args, **kwargs):
         server = SessionStore().server
 
-        self.sessions = Session.objects.all()
+        self.sessions = Session.objects.all().values_list(
+            'session_key', 
+            'session_data',
+            'expire_date', 
+        )                
         self.start_progressbar()
 
-        sessions = utils.queryset_iterator(self.sessions, CHUNK_SIZE)
         now = datetime.datetime.now()
-        pipe = None
-        for i, session in enumerate(sessions):
+        pipe = server.pipeline(transaction=False)
+        for i, session in enumerate(self.sessions.iterator()):
+            session_key, session_data, expire_date = session
             if i % CHUNK_SIZE == 0:
-                if pipe:
-                    pipe.execute()
-                pipe = server.pipeline(session.session_key)
+                gc.collect()
 
             # convert the expire date to a ttl in seconds
-            delta = session.expire_date - now
+            delta = expire_date - now
             ttl = (delta.days * 24 * 60 * 60) + delta.seconds
 
             # set the key, value and ttl
-            pipe.set(session.session_key, session.session_data)
-            pipe.expire(session.session_key, ttl)
+            pipe.set(session_key, session_data)
+            pipe.expire(session_key, ttl)
             self.update_progressbar(i)
 
+        pipe.execute()
         self.end_progressbar()
 
     def start_progressbar(self):
