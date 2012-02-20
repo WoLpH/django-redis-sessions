@@ -28,24 +28,30 @@ class Command(BaseCommand):
     TO STDOUT;
 
     And execute this command:
-    # psql -o sessions.txt -f sessions.sql | redis-cli
+    # psql -f sessions.sql | redis-cli
     '''
+
     def handle(self, *args, **kwargs):
         server = SessionStore().server
-
-        self.sessions = Session.objects.all().values_list(
-            'session_key', 
+        now = datetime.datetime.now()
+        self.sessions = Session.objects.filter(
+            expire_date__gte=now,
+        ).values_list(
+            'session_key',
             'session_data',
-            'expire_date', 
-        )                
+            'expire_date',
+        )
         self.start_progressbar()
 
-        now = datetime.datetime.now()
         pipe = server.pipeline(transaction=False)
         for i, session in enumerate(self.sessions.iterator()):
             session_key, session_data, expire_date = session
             if i % CHUNK_SIZE == 0:
                 gc.collect()
+
+            if expire_date < now:
+                # this session is old, let's ignore it
+                continue
 
             # convert the expire date to a ttl in seconds
             delta = expire_date - now
@@ -56,7 +62,9 @@ class Command(BaseCommand):
             pipe.expire(session_key, ttl)
             self.update_progressbar(i)
 
+        # execute all commands in 1 big pipeline
         pipe.execute()
+
         self.end_progressbar()
 
     def start_progressbar(self):
