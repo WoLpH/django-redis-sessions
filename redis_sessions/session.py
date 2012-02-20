@@ -9,7 +9,14 @@ class SessionStore(SessionBase):
 	"""
 	def __init__(self, session_key=None):
 		super(SessionStore, self).__init__(session_key)
-		self.server = redis.StrictRedis(
+
+		# added backwards compatibility for old Redis clients
+		if hasattr(redis, 'StrictRedis'):
+		    Redis = redis.StrictRedis
+		else:
+		    Redis = redis.Redis
+
+		self.server = Redis(
 			host=getattr(settings, 'SESSION_REDIS_HOST', 'localhost'),
 			port=getattr(settings, 'SESSION_REDIS_PORT', 6379),
 			db=getattr(settings, 'SESSION_REDIS_DB', 0),
