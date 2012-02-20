@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='django-redis-sessions',
-    version='0.2.2',
+    version='0.2.3',
     description="Redis Session Backend For Django",
     long_description="",
     keywords='django, sessions,',
